@@ -4,15 +4,9 @@
 from decimal import ROUND_FLOOR, Decimal
 import os
 import sys
+import time
 from pynput import keyboard
 import ccxt
-
-# --- CONFIGURATION ---
-SYMBOL = 'SOL/USDT:USDT'
-SYMBOL_DECIMALS = 2
-AMOUNT_UDST = 1
-LEVERAGE = 10
-STOP_LOSS = 0.5 # % stop loss
 
 # Get the value of an environment variable, returns None if not found
 api_key = os.getenv('BYBIT_API_KEY')
@@ -21,7 +15,8 @@ api_secret = os.getenv('BYBIT_API_SECRET')
 trade_config = {
     "coin": "BTC",
     "amount_usdt": 1.0,
-    "leverage": 10
+    "leverage": 10,
+    "stop_loss": 0.5
 }
 
 def get_single_key():
@@ -41,10 +36,17 @@ def get_single_key():
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         return char
 
+def get_symbol():
+    return f"{trade_config['coin']}/USDT:USDT"
 
+def get_amount_usdt():
+    return trade_config['amount_usdt']
 
+def get_leverage():
+    return trade_config['leverage']
 
-# print(f"Listening: F1 (Long), F2 (Short), F3 (Close), ESC (Quit)")
+def get_stop_loss():
+    return trade_config['stop_loss']
 
 def calculate_amount(mark_price, amount_usdt, leverage):
     return truncate_price(amount_usdt * leverage / mark_price)
@@ -85,19 +87,26 @@ def fetch_ticker():
 
 def open_long():
     try:      
-        mark_price = get_mark_price(SYMBOL)
-        amount = calculate_amount(mark_price, AMOUNT_UDST, LEVERAGE)
-        stop_loss_price = calculate_buy_stop_loss_price(mark_price, STOP_LOSS)
+        symbol = get_symbol()
+        mark_price = get_mark_price(symbol)
+        amount = calculate_amount(mark_price, get_amount_usdt(), get_leverage())
+        stop_loss_price = calculate_buy_stop_loss_price(mark_price, get_stop_loss())
         params = {
-            #'stopLossPrice': stop_loss_price, # Trigger price for SL
+            'stopLoss': stop_loss_price, # Trigger price for SL
+            'slTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
+            'tpslMode': 'Full',     # Ensures the Stop Loss covers 100% of your position size.
             'positionIdx': 0,        # Required for One-Way Mode
-            #'reduceOnly': True,
-            #'triggerBy': 'LastPrice',
         }
-        print(f"Opening LONG @ {mark_price}, amount {amount} with SL @ {stop_loss_price}")
-        order = exchange.create_market_buy_order(SYMBOL, amount, params=params)
-        print(f"{dict_to_string(order)}")
-        #print(f"🚀 LONG OPENED @ {order['price'] if order['price'] else 'Market'}")
+        print(f"Opening LONG amount {amount} with SL @ {stop_loss_price}")
+        order = exchange.create_market_buy_order(symbol, amount, params=params)
+        id = order['id']
+        print(f"Opened LONG with ID: {id}")
+
+        details = fetch_order(id, symbol)
+        if details:
+            print(f"{details}")
+        
+        
     except Exception as e: print(f"❌ Error: {e}")
 
 def open_short():
@@ -115,6 +124,64 @@ def open_short():
         print(f"{dict_to_string(order)}")
     except Exception as e: print(f"❌ Error: {e}")
 
+def fetch_order(order_id, symbol):
+    for _ in range(10):  # Try 10 times
+        order = exchange.fetch_order(order_id, symbol)
+        if order['status'] == 'closed':
+            return order
+        time.sleep(0.1)  # Wait 100ms before retrying
+    return None
+
+def set_stop_loss(position_side, mark_price):
+    # Specifically for Bybit
+    params = {
+        'stopLoss': '58000',      # Your SL Price
+        'slTriggerBy': 'LastPrice'
+    }
+
+    try:
+        # On Bybit, you apply the SL to the SYMBOL/Position, not necessarily the Order ID
+        response = exchange.set_trading_stop(symbol, params)
+        print("✅ Position Stop Loss updated!")
+    except Exception as e:
+        print(f"❌ Failed: {e}")
+
+def close_current_position(symbol):
+    try:
+        # 1. Fetch current positions for this symbol
+        positions = exchange.fetch_positions([symbol])
+        
+        # 2. Find the active position (where size > 0)
+        active_pos = None
+        for p in positions:
+            if float(p['contracts']) > 0:
+                active_pos = p
+                break
+        
+        if not active_pos:
+            print("❌ No open position found to close.")
+            return
+
+        # 3. Determine the closing side
+        # If you are LONG, you must SELL. If you are SHORT, you must BUY.
+        side = 'sell' if active_pos['side'] == 'long' else 'buy'
+        qty = active_pos['contracts']
+
+        print(f"🛑 Closing {active_pos['side']} position: {qty} {symbol}...")
+
+        # 4. Execute the closing Market Order
+        order = exchange.create_market_order(
+            symbol, 
+            side, 
+            qty, 
+            params={'reduceOnly': True}
+        )
+        
+        print(f"✅ Position closed! Order ID: {order['id']}")
+        
+    except Exception as e:
+        print(f"❌ Error closing position: {e}")
+
 def close_all():
     try:
         print("Closing all positions...")
@@ -131,23 +198,6 @@ def close_all():
                 exchange.create_market_order(SYMBOL, side, qty, params={'reduceOnly': True})
                 print(f"🛑 Position Closed: {qty} {SYMBOL}")
     except Exception as e: print(f"❌ Error: {e}")
-
-# Map keys to functions
-HOTKEYS = {
-    keyboard.Key.f1: open_long,
-    keyboard.Key.f2: open_short,
-    keyboard.Key.f3: close_all,
-    keyboard.Key.f5: fetch_ticker
-}
-
-def on_press(key):
-    if key in HOTKEYS:
-        HOTKEYS[key]()
-    if key == keyboard.Key.esc:
-        return False  # Stop listener
-
-# with keyboard.Listener(on_press=on_press) as listener:
-#     listener.join()
 
 # Coins 
 def load_coins(filename):
@@ -202,14 +252,30 @@ def main_trading_menu():
         
         key = get_single_key()
         
-        if key == '1': trade_config['side'] = "LONG"
-        elif key == '2': trade_config['side'] = "SHORT"
+        if key == '1': 
+            open_long()
+        elif key == '2':
+            open_short()
         elif key == '3':
             trade_config['amount_usdt'] = float(input("\nEnter USDT Margin: ") or 100)
         elif key == '4':
             trade_config['leverage'] = int(input("\nEnter Leverage: ") or 10)
         elif key == 'X':
             sys.exit()
+
+def position_menu():
+    while True:
+        print("[1] Close Current Position | [2] Close All Positions | [X] Back")
+        key = get_single_key()
+        
+        if key == '1':
+            close_current_position(get_symbol())
+            return
+        elif key == '2':
+            close_all()
+            return
+        elif key == 'X':
+            return
 
 if __name__ == "__main__":
     # # Initialize the exchange
