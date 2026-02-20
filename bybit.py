@@ -3,7 +3,9 @@
 
 from decimal import ROUND_FLOOR, Decimal
 import os
+import sys
 from pynput import keyboard
+import ccxt
 
 # --- CONFIGURATION ---
 SYMBOL = 'SOL/USDT:USDT'
@@ -16,30 +18,33 @@ STOP_LOSS = 0.5 # % stop loss
 api_key = os.getenv('BYBIT_API_KEY')
 api_secret = os.getenv('BYBIT_API_SECRET')
 
-import ccxt
+trade_config = {
+    "coin": "BTC",
+    "amount_usdt": 1.0,
+    "leverage": 10
+}
 
-# Initialize the exchange
-exchange = ccxt.bybit({
-    'apiKey': api_key,
-    'secret': api_secret,
-    'enableRateLimit': True,
-    'options': {'defaultType': 'swap'} # Set to swap for derivatives
-})
-
-exchange.enable_demo_trading(True)
-
-try:
-    # Verify you are in demo mode by checking balance 
-    # (Bybit usually gives you 50,000 USDT in demo)
-    print("🔗 Connecting to Bybit Demo...")
-    balance = exchange.fetch_balance()
-    print(f"✅ Connected! Demo USDT: {balance['total']['USDT']}")
-except Exception as e:
-    print(f"❌ Connection Failed: {e}")
-    exit(1)
+def get_single_key():
+    if os.name == 'nt':  # Windows logic
+        import msvcrt
+        # Returns bytes, so we decode to string
+        char = msvcrt.getch().decode('utf-8', errors='ignore').upper()
+        return char
+    else:  # Linux/Mac logic
+        import tty, termios
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(sys.stdin.fileno())
+            char = sys.stdin.read(1).upper()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        return char
 
 
-print(f"Listening: F1 (Long), F2 (Short), F3 (Close), ESC (Quit)")
+
+
+# print(f"Listening: F1 (Long), F2 (Short), F3 (Close), ESC (Quit)")
 
 def calculate_amount(mark_price, amount_usdt, leverage):
     return truncate_price(amount_usdt * leverage / mark_price)
@@ -141,5 +146,91 @@ def on_press(key):
     if key == keyboard.Key.esc:
         return False  # Stop listener
 
-with keyboard.Listener(on_press=on_press) as listener:
-    listener.join()
+# with keyboard.Listener(on_press=on_press) as listener:
+#     listener.join()
+
+# Coins 
+def load_coins(filename):
+    try:
+        with open(filename, 'r') as f:
+            # .strip() removes whitespace/newlines
+            return [line.strip().upper() for line in f if line.strip()]
+    except FileNotFoundError:
+        print(f"Error: {filename} not found.")
+        sys.exit(1)
+
+def get_user_choice(options):
+    print("--- Available Coins ---")
+    # Display options in a numbered list
+    for i, coin in enumerate(options, 1):
+        print(f"{i}. {coin}")
+    
+    while True:
+        choice = input("\nSelect a coin (Name or Number): ").strip().upper()
+        
+        # Check if input matches a name (e.g., "BTC")
+        if choice in options:
+            return choice
+        
+        # Check if input matches a number (e.g., "1")
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(options):
+                return options[idx]
+        
+        print(f"Invalid selection. Please choose from: {', '.join(options)}")
+
+# --- 4. MENUS ---    
+def coin_selection_menu():
+    coins = load_coins('coins.txt')
+    while True:
+        for i, c in enumerate(coins, 1): print(f"{i}. {c}")
+        choice = input("\nChoose number or type name: ").strip().upper()
+
+        if choice in coins: return choice
+        if choice.isdigit() and 0 < int(choice) <= len(coins):
+            return coins[int(choice)-1]
+
+def main_trading_menu():
+    while True:
+        
+        print(f"Coin:      {trade_config['coin']}")
+        print(f"Amount:    ${trade_config['amount_usdt']} USDT")
+        print(f"Leverage:  {trade_config['leverage']}x")
+        print("-" * 30)
+        print("[1] Long | [2] Short | [3] Amount | [4] Leverage | [X] Exit")
+        
+        key = get_single_key()
+        
+        if key == '1': trade_config['side'] = "LONG"
+        elif key == '2': trade_config['side'] = "SHORT"
+        elif key == '3':
+            trade_config['amount_usdt'] = float(input("\nEnter USDT Margin: ") or 100)
+        elif key == '4':
+            trade_config['leverage'] = int(input("\nEnter Leverage: ") or 10)
+        elif key == 'X':
+            sys.exit()
+
+if __name__ == "__main__":
+    # # Initialize the exchange
+    exchange = ccxt.bybit({
+        'apiKey': api_key,
+        'secret': api_secret,
+        'enableRateLimit': True,
+        'options': {'defaultType': 'swap'} # Set to swap for derivatives
+    })
+
+    exchange.enable_demo_trading(True)
+
+    try:
+        # Verify you are in demo mode by checking balance 
+        # (Bybit usually gives you 50,000 USDT in demo)
+        print("Connecting ...")
+        balance = exchange.fetch_balance()
+        print(f"Connected! Balance: {balance['total']['USDT']}")
+    except Exception as e:
+        print(f"Connection Failed: {e}")
+        exit(1)
+
+    trade_config['coin'] = coin_selection_menu()
+    main_trading_menu()
