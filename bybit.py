@@ -22,7 +22,21 @@ trade_config = {
     "take_profit": 1.1,
 }
 
+current_order = {}
 
+def set_order_id(order_id):
+    global current_order
+    current_order['id'] = order_id
+
+def get_order_id():
+    return current_order.get('id')
+
+def set_order_entry_price(entry_price):
+    global current_order
+    current_order['entry_price'] = entry_price
+
+def get_order_entry_price():
+    return current_order.get('entry_price')    
 
 def get_single_key():
     if os.name == 'nt':  # Windows logic
@@ -128,9 +142,9 @@ def open_long():
         print(f"Opened LONG with ID: {id}")
 
         print("⏳ Waiting for trade execution data...")
-        time.sleep(1.5)  # Brief pause for exchange trade engine to sync
+        time.sleep(0.5)  # Brief pause for exchange trade engine to sync
 
-        details = get_trade_execution(id, symbol)
+        details = get_entry_price(id, symbol)
         if details:
             print(f"{details}")
         
@@ -158,12 +172,30 @@ def open_short():
         print(f"Opened SHORT with ID: {id}")
 
         print("⏳ Waiting for trade execution data...")
-        time.sleep(1.5)  # Brief pause for exchange trade engine to sync
+        time.sleep(0.5)  # Brief pause for exchange trade engine to sync
 
-        details = get_trade_execution(id, symbol)
+        details = get_entry_price(id, symbol)
         if details:
             print(f"{details}")
     except Exception as e: print(f"❌ Error: {e}")
+
+def get_entry_price(order_id, symbol):
+    # Market orders move to 'closed' almost instantly
+    for attempt in range(5):
+        print(f"⏳ syncing trade data (attempt {attempt + 1}/5)")
+        
+        # We fetch recently closed orders for this symbol
+        closed_orders = exchange.fetch_closed_orders(symbol)
+        
+        # Look for our specific order in the list
+        for order in closed_orders:
+            if order['id'] == order_id:
+                print(f"✅ Entry Price: {order['average']}, fee: {order['fee']['cost']} {order['fee']['currency']}")
+                return order
+        
+        time.sleep(0.2) # Short wait for API sync
+        
+    return None
 
 def get_trade_execution(order_id, symbol):
     # Fetch trades associated with this specific order ID
