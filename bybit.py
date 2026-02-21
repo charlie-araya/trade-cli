@@ -139,6 +139,7 @@ def open_long():
         print(f"Opening LONG amount {amount} with SL @ {stop_loss_price} TP @ {take_profit_price}")
         order = exchange.create_market_buy_order(symbol, amount, params=params)
         id = order['id']
+        set_order_id(id)
         print(f"Opened LONG with ID: {id}")
 
         print("⏳ Waiting for trade execution data...")
@@ -146,9 +147,8 @@ def open_long():
 
         details = get_entry_price(id, symbol)
         if details:
-            print(f"{details}")
-        
-        
+            set_order_entry_price(details['average'])
+                            
     except Exception as e: print(f"❌ Error: {e}")
 
 def open_short():
@@ -169,6 +169,7 @@ def open_short():
         print(f"Opening SHORT amount {amount} with SL @ {stop_loss_price} TP @ {take_profit_price}")
         order = exchange.create_market_sell_order(symbol, amount, params=params)
         id = order['id']
+        set_order_id(id)
         print(f"Opened SHORT with ID: {id}")
 
         print("⏳ Waiting for trade execution data...")
@@ -176,12 +177,13 @@ def open_short():
 
         details = get_entry_price(id, symbol)
         if details:
-            print(f"{details}")
+            set_order_entry_price(details['average'])
+
     except Exception as e: print(f"❌ Error: {e}")
 
 def get_entry_price(order_id, symbol):
     # Market orders move to 'closed' almost instantly
-    for attempt in range(5):
+    for attempt in range(10):
         print(f"⏳ syncing trade data (attempt {attempt + 1}/5)")
         
         # We fetch recently closed orders for this symbol
@@ -193,21 +195,50 @@ def get_entry_price(order_id, symbol):
                 print(f"✅ Entry Price: {order['average']}, fee: {order['fee']['cost']} {order['fee']['currency']}")
                 return order
         
-        time.sleep(0.2) # Short wait for API sync
+        time.sleep(0.4) # Short wait for API sync
         
     return None
 
-def get_trade_execution(order_id, symbol):
-    # Fetch trades associated with this specific order ID
-    trades = exchange.fetch_my_trades(symbol, params={'orderId': order_id})
-    
-    if trades:
-        # If order was filled in multiple parts, average them
-        avg_price = sum(t['price'] * t['amount'] for t in trades) / sum(t['amount'] for t in trades)
-        total_fee = sum(t['fee']['cost'] for t in trades)
-        print(f"Avg Price = {avg_price}, Total Fee = {total_fee}")
-        return trades
-    return None
+def close_position_market(symbol):
+    try:
+        print(f"Fetching current position for {symbol}...")
+        # 1. Fetch current position for the symbol
+        # Bybit V5 requires a list of symbols or category
+        positions = exchange.fetch_positions([symbol])
+        
+        # 2. Find the active position
+        active_pos = next((p for p in positions if float(p['contracts']) > 0), None)
+
+        if not active_pos:
+            print(f"⚠️ No active position found for {symbol}")
+            return
+
+        # 3. Prepare the closing order details
+        # If side is 'long', we 'sell'. If 'short', we 'buy'.
+        side = 'sell' if active_pos['side'] == 'long' else 'buy'
+        qty = active_pos['contracts']
+
+        print(f"🛑 Closing {active_pos['side']} position of {qty} {symbol}...")
+
+        # 4. Execute the market close order
+        # We use camelCase 'reduceOnly' for Bybit V5 in CCXT
+        order = exchange.create_order(
+            symbol=symbol,
+            type='market',
+            side=side,
+            amount=qty,
+            params={'reduceOnly': True}
+        )
+
+        print(f"✅ Position Closed! Order ID: {order['id']}")
+        
+        # (Optional) Verify closure with your fetch_closed_orders logic
+        time.sleep(1)
+        final = exchange.fetch_closed_orders(symbol, limit=1)[0]
+        print(f"🏁 Final Exit Price: {final['average']} USDT")
+
+    except Exception as e:
+        print(f"❌ Error closing position: {e}")
 
 def fetch_order(order_id, symbol):
     for _ in range(10):  # Try 10 times
@@ -332,6 +363,8 @@ def main_trading_menu():
         print(f"Coin:      {trade_config['coin']}")
         print(f"Amount:    ${trade_config['amount_usdt']} USDT")
         print(f"Leverage:  {trade_config['leverage']}x")
+        print(f"Stop Loss: {trade_config['stop_loss']}%")
+        print(f"Take Profit: {trade_config['take_profit']}%")
         print("-" * 30)
         print("[1] Long | [2] Short | [3] Amount | [4] Leverage | [X] Exit")
         
@@ -339,10 +372,12 @@ def main_trading_menu():
         
         if key == '1': 
             open_long()
+            position_menu()
         elif key == '2':
             open_short()
+            position_menu()
         elif key == '3':
-            trade_config['amount_usdt'] = float(input("\nEnter USDT Margin: ") or 100)
+            trade_config['amount_usdt'] = float(input("\nEnter USDT Margin: ") or 10)
         elif key == '4':
             trade_config['leverage'] = int(input("\nEnter Leverage: ") or 10)
         elif key == 'X':
@@ -350,14 +385,11 @@ def main_trading_menu():
 
 def position_menu():
     while True:
-        print("[1] Close Current Position | [2] Close All Positions | [X] Back")
+        print("[1] Close Position [X] Back")
         key = get_single_key()
         
         if key == '1':
-            close_current_position(get_symbol())
-            return
-        elif key == '2':
-            close_all()
+            close_position_market(get_symbol())
             return
         elif key == 'X':
             return
