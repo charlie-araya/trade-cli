@@ -8,6 +8,8 @@ import time
 from pynput import keyboard
 import ccxt
 
+SYMBOL_DECIMALS = 2
+
 # Get the value of an environment variable, returns None if not found
 api_key = os.getenv('BYBIT_API_KEY')
 api_secret = os.getenv('BYBIT_API_SECRET')
@@ -16,8 +18,11 @@ trade_config = {
     "coin": "BTC",
     "amount_usdt": 1.0,
     "leverage": 10,
-    "stop_loss": 0.5
+    "stop_loss": 0.5,
+    "take_profit": 1.1,
 }
+
+
 
 def get_single_key():
     if os.name == 'nt':  # Windows logic
@@ -48,12 +53,18 @@ def get_leverage():
 def get_stop_loss():
     return trade_config['stop_loss']
 
+def get_take_profit():
+    return trade_config['take_profit']
+
 def calculate_amount(mark_price, amount_usdt, leverage):
-    return truncate_price(amount_usdt * leverage / mark_price)
+    #return truncate_price(amount_usdt * leverage / mark_price)
+    return exchange.amount_to_precision(get_symbol(), amount_usdt * leverage / mark_price)
 
 def get_mark_price(symbol):
+    print(f"Fetching mark price for {symbol}...")
     ticker = exchange.fetch_ticker(symbol)
     mark_price = ticker['last']  
+    print(f"Mark Price for {symbol}: {mark_price}")
     return mark_price
 
 # --- Decimal to Precision ---
@@ -73,6 +84,17 @@ def calculate_stop_loss_price(price, factor, percent):
     sl_price = price * (1 + (factor * percent / 100))        
     return truncate_price(sl_price)
 
+# --- Take Profit ---
+def calculate_buy_take_profit_price(price, percent):
+    return calculate_take_profit_price(price, 1, percent)
+
+def calculate_sell_take_profit_price(price, percent):
+    return calculate_take_profit_price(price, -1, percent)
+
+def calculate_take_profit_price(price, factor, percent):
+    tp_price = price * (1 + (factor * percent / 100))        
+    return truncate_price(tp_price)
+
 # --- Printing output ---
 def dict_to_string(d):
     return '\n'.join(f"{k}: {v}" for k, v in d.items())
@@ -91,18 +113,24 @@ def open_long():
         mark_price = get_mark_price(symbol)
         amount = calculate_amount(mark_price, get_amount_usdt(), get_leverage())
         stop_loss_price = calculate_buy_stop_loss_price(mark_price, get_stop_loss())
+        take_profit_price = calculate_buy_take_profit_price(mark_price, get_take_profit())
         params = {
-            'stopLoss': stop_loss_price, # Trigger price for SL
+            'stopLoss': str(stop_loss_price), # Trigger price for SL
             'slTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
+            'takeProfit': str(take_profit_price), # Trigger price for TP
+            'tpTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
             'tpslMode': 'Full',     # Ensures the Stop Loss covers 100% of your position size.
             'positionIdx': 0,        # Required for One-Way Mode
         }
-        print(f"Opening LONG amount {amount} with SL @ {stop_loss_price}")
+        print(f"Opening LONG amount {amount} with SL @ {stop_loss_price} TP @ {take_profit_price}")
         order = exchange.create_market_buy_order(symbol, amount, params=params)
         id = order['id']
         print(f"Opened LONG with ID: {id}")
 
-        details = fetch_order(id, symbol)
+        print("⏳ Waiting for trade execution data...")
+        time.sleep(1.5)  # Brief pause for exchange trade engine to sync
+
+        details = get_trade_execution(id, symbol)
         if details:
             print(f"{details}")
         
@@ -111,25 +139,50 @@ def open_long():
 
 def open_short():
     try:
-        mark_price = get_mark_price(SYMBOL)
-        amount = calculate_amount(mark_price, AMOUNT_UDST, LEVERAGE)
-        stop_loss_price = calculate_sell_stop_loss_price(mark_price, STOP_LOSS)
+        symbol = get_symbol()
+        mark_price = get_mark_price(symbol)
+        amount = calculate_amount(mark_price, get_amount_usdt(), get_leverage())
+        stop_loss_price = calculate_sell_stop_loss_price(mark_price, get_stop_loss())
+        take_profit_price = calculate_sell_take_profit_price(mark_price, get_take_profit())
         params = {
-            #'stopLossPrice': stop_loss_price, # Trigger price for SL
+            'stopLoss': str(stop_loss_price), # Trigger price for SL
+            'slTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
+            'takeProfit': str(take_profit_price), # Trigger price for TP
+            'tpTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
+            'tpslMode': 'Full',     # Ensures the Stop Loss covers 100% of your position size.
             'positionIdx': 0,        # Required for One-Way Mode
-            #'triggerBy': 'LastPrice',
         }
-        print(f"Opening SHORT @ {mark_price}, amount {amount} with SL @ {stop_loss_price}")
-        order = exchange.create_market_sell_order(SYMBOL, amount, params=params)
-        print(f"{dict_to_string(order)}")
+        print(f"Opening SHORT amount {amount} with SL @ {stop_loss_price} TP @ {take_profit_price}")
+        order = exchange.create_market_sell_order(symbol, amount, params=params)
+        id = order['id']
+        print(f"Opened SHORT with ID: {id}")
+
+        print("⏳ Waiting for trade execution data...")
+        time.sleep(1.5)  # Brief pause for exchange trade engine to sync
+
+        details = get_trade_execution(id, symbol)
+        if details:
+            print(f"{details}")
     except Exception as e: print(f"❌ Error: {e}")
+
+def get_trade_execution(order_id, symbol):
+    # Fetch trades associated with this specific order ID
+    trades = exchange.fetch_my_trades(symbol, params={'orderId': order_id})
+    
+    if trades:
+        # If order was filled in multiple parts, average them
+        avg_price = sum(t['price'] * t['amount'] for t in trades) / sum(t['amount'] for t in trades)
+        total_fee = sum(t['fee']['cost'] for t in trades)
+        print(f"Avg Price = {avg_price}, Total Fee = {total_fee}")
+        return trades
+    return None
 
 def fetch_order(order_id, symbol):
     for _ in range(10):  # Try 10 times
         order = exchange.fetch_order(order_id, symbol)
         if order['status'] == 'closed':
             return order
-        time.sleep(0.1)  # Wait 100ms before retrying
+        time.sleep(0.05)  # Wait 50ms before retrying
     return None
 
 def set_stop_loss(position_side, mark_price):
