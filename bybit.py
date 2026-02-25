@@ -16,10 +16,10 @@ api_secret = os.getenv('BYBIT_API_SECRET')
 
 trade_config = {
     "coin": "BTC",
-    "amount_usdt": 1.0,
+    "amount_usdt": 100.0,
     "leverage": 10,
     "stop_loss": 0.5,
-    "take_profit": 1.1,
+    "take_profit": 2.0,
 }
 
 current_order = {}
@@ -134,7 +134,7 @@ def open_long():
             'takeProfit': str(take_profit_price), # Trigger price for TP
             'tpTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
             'tpslMode': 'Full',     # Ensures the Stop Loss covers 100% of your position size.
-            'positionIdx': 0,        # Required for One-Way Mode
+            'positionIdx': 1,        # 1 for Buy/Long, 2 for Sell/Short
         }
         print(f"Opening LONG amount {amount} with SL @ {stop_loss_price} TP @ {take_profit_price}")
         order = exchange.create_market_buy_order(symbol, amount, params=params)
@@ -164,7 +164,7 @@ def open_short():
             'takeProfit': str(take_profit_price), # Trigger price for TP
             'tpTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
             'tpslMode': 'Full',     # Ensures the Stop Loss covers 100% of your position size.
-            'positionIdx': 0,        # Required for One-Way Mode
+            'positionIdx': 2,        # 1 for Buy/Long, 2 for Sell/Short
         }
         print(f"Opening SHORT amount {amount} with SL @ {stop_loss_price} TP @ {take_profit_price}")
         order = exchange.create_market_sell_order(symbol, amount, params=params)
