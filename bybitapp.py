@@ -106,9 +106,9 @@ def round_price(price, tick_size):
 def open_long():
     try:      
         symbol = get_symbol()
-        price = float(get_price(symbol))
-        qty = calculate_amount(price, get_amount_usdt(), get_leverage(), get_price_scale())
-        stop_loss_price = calculate_buy_stop_loss_price(price, get_stop_loss())
+        #price = float(get_price(symbol))
+        
+        #stop_loss_price = calculate_buy_stop_loss_price(price, get_stop_loss())
         # take_profit_price = calculate_buy_take_profit_price(mark_price, get_take_profit())
         # params = {
         #     'stopLoss': str(stop_loss_price), # Trigger price for SL
@@ -120,18 +120,45 @@ def open_long():
         # }        
         #print(f"Opening LONG amount {amount} with SL @ {stop_loss_price} TP @ {take_profit_price}")
         # order = exchange.create_market_buy_order(symbol, amount, params=params)
+        
+        
+        # Taker
+        # order = session.place_order(
+        #     category="linear",
+        #     symbol=symbol,
+        #     side="Buy",
+        #     orderType="Market",
+        #     qty=str(qty),
+        #     stopLoss=str(stop_loss_price),
+        #     slTriggerBy='MarkPrice',
+        #     reduceOnly=False,
+        #     positionIdx=1 # 1 for Buy/Long, 2 for Sell/Short
+        # )
+
+
+        # Maker
+        entry_price = get_maker_price(symbol, "buy", get_tick_size())
+        qty = calculate_amount(entry_price, get_amount_usdt(), get_leverage(), get_price_scale())
+        stop_loss_price = calculate_buy_stop_loss_price(entry_price, get_stop_loss())
         order = session.place_order(
             category="linear",
             symbol=symbol,
             side="Buy",
-            orderType="Market",
+            orderType="Limit",
             qty=str(qty),
+            price=str(entry_price),
             stopLoss=str(stop_loss_price),
             slTriggerBy='MarkPrice',
             reduceOnly=False,
-            positionIdx=1 # 1 for Buy/Long, 2 for Sell/Short
+            positionIdx=1, # 1 for Buy/Long, 2 for Sell/Short
+            timeInForce="PostOnly" # CRITICAL: Ensures you only pay Maker fees
         )
+
         print(order)
+
+
+
+
         # id = order['id']
         # set_order_id(id)
         # print(f"Opened LONG with ID: {id}")
@@ -148,9 +175,9 @@ def open_long():
 def open_short():
     try:
         symbol = get_symbol()
-        price = float(get_price(symbol))
-        qty = calculate_amount(price, get_amount_usdt(), get_leverage(), get_price_scale())
-        stop_loss_price = calculate_sell_stop_loss_price(price, get_stop_loss())
+        #price = float(get_price(symbol))
+        #qty = calculate_amount(price, get_amount_usdt(), get_leverage(), get_price_scale())
+        
         # take_profit_price = calculate_sell_take_profit_price(mark_price, get_take_profit())
         # params = {
         #     'stopLoss': str(stop_loss_price), # Trigger price for SL
@@ -162,17 +189,40 @@ def open_short():
         # }
         # print(f"Opening SHORT amount {amount} with SL @ {stop_loss_price} TP @ {take_profit_price}")
         # order = exchange.create_market_sell_order(symbol, amount, params=params)
+        
+        # Taker
+        # order = session.place_order(
+        #     category="linear",
+        #     symbol=symbol,
+        #     side="Sell",
+        #     orderType="Market",
+        #     qty=str(qty),
+        #     stopLoss=str(stop_loss_price),
+        #     slTriggerBy='MarkPrice',
+        #     reduceOnly=False,
+        #     positionIdx=2 # 1 for Buy/Long, 2 for Sell/Short
+        # )
+
+        # Maker
+        entry_price = get_maker_price(symbol, "sell", get_tick_size())
+        qty = calculate_amount(entry_price, get_amount_usdt(), get_leverage(), get_price_scale())
+        stop_loss_price = calculate_sell_stop_loss_price(entry_price, get_stop_loss())
         order = session.place_order(
             category="linear",
             symbol=symbol,
             side="Sell",
-            orderType="Market",
+            orderType="Limit",
             qty=str(qty),
+            price=str(entry_price),
             stopLoss=str(stop_loss_price),
             slTriggerBy='MarkPrice',
             reduceOnly=False,
-            positionIdx=2 # 1 for Buy/Long, 2 for Sell/Short
+            positionIdx=2, # 1 for Buy/Long, 2 for Sell/Short
+            timeInForce="PostOnly" # CRITICAL: Ensures you only pay Maker fees
         )
+
+
+
         print(order)
         # id = order['id']
         # set_order_id(id)
@@ -387,13 +437,27 @@ def main_trading_menu():
         elif key == 'X':
             sys.exit()
 
-def position_menu():
-    while True:
-        print("[X] Back")
-        key = get_single_key()
+def get_maker_price(symbol, side, tick_size):
+    # 1. Get tickSize for precision
+    # instrument = session.get_instruments_info(category="linear", symbol=symbol)
+    # tick_size = float(instrument['result']['list'][0]['priceFilter']['tickSize'])
+    
+    # 2. Get current market price (LTP)
+    ticker = session.get_tickers(category="linear", symbol=symbol)
+    lastPrice = float(ticker['result']['list'][0]['lastPrice'])
+    
+    # 3. Calculate a price 1 tick away to improve Maker chances
+    if side.lower() == "buy":
+        # Place buy order 1 tick below current price
+        target_price = lastPrice - (tick_size * 2)
+    else:
+        # Place sell order 1 tick above current price
+        target_price = lastPrice + (tick_size * 2)
         
-        # elif key == 'X':
-        #     return
+    # Round to the correct tickSize precision
+    #precision = len(str(tick_size).split('.')[-1]) if '.' in str(tick_size) else 0
+    return round_price(target_price, tick_size)
+
 
 if __name__ == "__main__":
     global session
