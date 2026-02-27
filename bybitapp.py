@@ -1,32 +1,8 @@
-#pip install ccxt
 #pip install pynput
-
+import math
+import os, sys, time
 from decimal import ROUND_FLOOR, Decimal
-import os
-import sys
-import time
-from pynput import keyboard
-import ccxt
-
-SYMBOL_DECIMALS = 2
-
-# Get the value of an environment variable, returns None if not found
-api_key = os.getenv('LBANK_API_KEY')
-api_secret = os.getenv('LBANK_API_SECRET')
-
-trade_config = {
-    "coin": "BTC",
-    "amount_usdt": 25.0,
-    "leverage": 10,
-    "stop_loss": 0.5,
-    "take_profit": 1.1,
-}
-
-current_order = {}
-
-def set_order_id(order_id):
-    global current_order
-    current_order['id'] = order_id
+from pybit.unified_trading import HTTP
 
 def get_order_id():
     return current_order.get('id')
@@ -56,36 +32,38 @@ def get_single_key():
         return char
 
 def get_symbol():
-    return f"{trade_config['coin']}/USDT"
+    return f"{config['pair']}"
 
 def get_amount_usdt():
-    return trade_config['amount_usdt']
+    return config['amount_usdt']
 
 def get_leverage():
-    return trade_config['leverage']
+    return config['leverage']
 
 def get_stop_loss():
-    return trade_config['stop_loss']
+    return config['stop_loss']
 
 def get_take_profit():
-    return trade_config['take_profit']
+    return config['take_profit']
 
-def calculate_amount(mark_price, amount_usdt, leverage):
-    #return truncate_price(amount_usdt * leverage / mark_price)
-    return exchange.amount_to_precision(get_symbol(), amount_usdt * leverage / mark_price)
+def get_price_scale():
+    return float(config['price_scale'])
 
-def get_mark_price(symbol):
-    print(f"Fetching mark price for {symbol}...")
-    ticker = exchange.fetch_ticker(symbol)
-    mark_price = ticker['last']  
-    print(f"Mark Price for {symbol}: {mark_price}")
-    return mark_price
+def get_tick_size():
+    return float(config['tick_size'])
+
+def calculate_amount(price, amount_usdt, leverage, price_scale):
+    return truncate_price(amount_usdt * leverage / price, price_scale)    
+
+def get_price(symbol):
+    ticker = session.get_tickers(category="linear", symbol=symbol)
+    return ticker['result']['list'][0]['lastPrice']
 
 # --- Decimal to Precision ---
-def truncate_price(price):
-    quantize_exp = Decimal(f"{0:.{SYMBOL_DECIMALS}f}")
-    truncated = float(Decimal(str(price)).quantize(quantize_exp, rounding=ROUND_FLOOR))
-    return truncated
+def truncate_price(qty, step):
+    #factor = 10.0 ** decimals
+    #return math.trunc(price * factor) / factor
+    return float(round(math.floor(qty / step) * step, 10))
 
 # --- Stop Loss ---
 def calculate_buy_stop_loss_price(price, percent):
@@ -96,7 +74,7 @@ def calculate_sell_stop_loss_price(price, percent):
 
 def calculate_stop_loss_price(price, factor, percent):
     sl_price = price * (1 + (factor * percent / 100))        
-    return truncate_price(sl_price)
+    return round_price(sl_price, get_tick_size())
 
 # --- Take Profit ---
 def calculate_buy_take_profit_price(price, percent):
@@ -121,63 +99,91 @@ def fetch_ticker():
     except Exception as e:
         print(f"❌ Ticker Fetch Error: {e}")
 
+def round_price(price, tick_size):
+    # Rounds to the nearest valid tickSize
+    return round(math.floor(price / tick_size) * tick_size, 8)
+
 def open_long():
     try:      
         symbol = get_symbol()
-        mark_price = get_mark_price(symbol)
-        amount = calculate_amount(mark_price, get_amount_usdt(), get_leverage())
-        stop_loss_price = calculate_buy_stop_loss_price(mark_price, get_stop_loss())
-        take_profit_price = calculate_buy_take_profit_price(mark_price, get_take_profit())
-        params = {
-            'stopLoss': str(stop_loss_price), # Trigger price for SL
-            'slTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
-            'takeProfit': str(take_profit_price), # Trigger price for TP
-            'tpTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
-            'tpslMode': 'Full',     # Ensures the Stop Loss covers 100% of your position size.
-            'positionIdx': 1,        # 1 for Buy/Long, 2 for Sell/Short
-        }
-        print(f"Opening LONG amount {amount} with SL @ {stop_loss_price} TP @ {take_profit_price}")
-        order = exchange.create_market_buy_order(symbol, amount, params=params)
-        id = order['id']
-        set_order_id(id)
-        print(f"Opened LONG with ID: {id}")
+        price = float(get_price(symbol))
+        qty = calculate_amount(price, get_amount_usdt(), get_leverage(), get_price_scale())
+        stop_loss_price = calculate_buy_stop_loss_price(price, get_stop_loss())
+        # take_profit_price = calculate_buy_take_profit_price(mark_price, get_take_profit())
+        # params = {
+        #     'stopLoss': str(stop_loss_price), # Trigger price for SL
+        #     'slTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
+        #     'takeProfit': str(take_profit_price), # Trigger price for TP
+        #     'tpTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
+        #     'tpslMode': 'Full',     # Ensures the Stop Loss covers 100% of your position size.
+        #     'positionIdx': 1,        # 1 for Buy/Long, 2 for Sell/Short
+        # }        
+        #print(f"Opening LONG amount {amount} with SL @ {stop_loss_price} TP @ {take_profit_price}")
+        # order = exchange.create_market_buy_order(symbol, amount, params=params)
+        order = session.place_order(
+            category="linear",
+            symbol=symbol,
+            side="Buy",
+            orderType="Market",
+            qty=str(qty),
+            stopLoss=str(stop_loss_price),
+            slTriggerBy='MarkPrice',
+            reduceOnly=False,
+            positionIdx=1 # 1 for Buy/Long, 2 for Sell/Short
+        )
+        print(order)
+        # id = order['id']
+        # set_order_id(id)
+        # print(f"Opened LONG with ID: {id}")
 
-        print("⏳ Waiting for trade execution data...")
-        time.sleep(0.5)  # Brief pause for exchange trade engine to sync
+        # print("⏳ Waiting for trade execution data...")
+        # time.sleep(0.5)  # Brief pause for exchange trade engine to sync
 
-        details = get_entry_price(id, symbol)
-        if details:
-            set_order_entry_price(details['average'])
+        # details = get_entry_price(id, symbol)
+        # if details:
+        #     set_order_entry_price(details['average'])
                             
     except Exception as e: print(f"❌ Error: {e}")
 
 def open_short():
     try:
         symbol = get_symbol()
-        mark_price = get_mark_price(symbol)
-        amount = calculate_amount(mark_price, get_amount_usdt(), get_leverage())
-        stop_loss_price = calculate_sell_stop_loss_price(mark_price, get_stop_loss())
-        take_profit_price = calculate_sell_take_profit_price(mark_price, get_take_profit())
-        params = {
-            'stopLoss': str(stop_loss_price), # Trigger price for SL
-            'slTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
-            'takeProfit': str(take_profit_price), # Trigger price for TP
-            'tpTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
-            'tpslMode': 'Full',     # Ensures the Stop Loss covers 100% of your position size.
-            'positionIdx': 2,        # 1 for Buy/Long, 2 for Sell/Short
-        }
-        print(f"Opening SHORT amount {amount} with SL @ {stop_loss_price} TP @ {take_profit_price}")
-        order = exchange.create_market_sell_order(symbol, amount, params=params)
-        id = order['id']
-        set_order_id(id)
-        print(f"Opened SHORT with ID: {id}")
+        price = float(get_price(symbol))
+        qty = calculate_amount(price, get_amount_usdt(), get_leverage(), get_price_scale())
+        stop_loss_price = calculate_sell_stop_loss_price(price, get_stop_loss())
+        # take_profit_price = calculate_sell_take_profit_price(mark_price, get_take_profit())
+        # params = {
+        #     'stopLoss': str(stop_loss_price), # Trigger price for SL
+        #     'slTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
+        #     'takeProfit': str(take_profit_price), # Trigger price for TP
+        #     'tpTriggerBy': 'MarkPrice', #Highly Recommended for Futures to avoid "scam wicks"
+        #     'tpslMode': 'Full',     # Ensures the Stop Loss covers 100% of your position size.
+        #     'positionIdx': 2,        # 1 for Buy/Long, 2 for Sell/Short
+        # }
+        # print(f"Opening SHORT amount {amount} with SL @ {stop_loss_price} TP @ {take_profit_price}")
+        # order = exchange.create_market_sell_order(symbol, amount, params=params)
+        order = session.place_order(
+            category="linear",
+            symbol=symbol,
+            side="Sell",
+            orderType="Market",
+            qty=str(qty),
+            stopLoss=str(stop_loss_price),
+            slTriggerBy='MarkPrice',
+            reduceOnly=False,
+            positionIdx=2 # 1 for Buy/Long, 2 for Sell/Short
+        )
+        print(order)
+        # id = order['id']
+        # set_order_id(id)
+        # print(f"Opened SHORT with ID: {id}")
 
-        print("⏳ Waiting for trade execution data...")
-        time.sleep(0.5)  # Brief pause for exchange trade engine to sync
+        # print("⏳ Waiting for trade execution data...")
+        # time.sleep(0.5)  # Brief pause for exchange trade engine to sync
 
-        details = get_entry_price(id, symbol)
-        if details:
-            set_order_entry_price(details['average'])
+        # details = get_entry_price(id, symbol)
+        # if details:
+        #     set_order_entry_price(details['average'])
 
     except Exception as e: print(f"❌ Error: {e}")
 
@@ -360,11 +366,11 @@ def coin_selection_menu():
 def main_trading_menu():
     while True:
         
-        print(f"Coin:      {trade_config['coin']}")
-        print(f"Amount:    ${trade_config['amount_usdt']} USDT")
-        print(f"Leverage:  {trade_config['leverage']}x")
-        print(f"Stop Loss: {trade_config['stop_loss']}%")
-        print(f"Take Profit: {trade_config['take_profit']}%")
+        print(f"Coin:      {config['pair']}")
+        print(f"Amount:    ${config['amount_usdt']} USDT")
+        print(f"Leverage:  {config['leverage']}x")
+        print(f"Stop Loss: {config['stop_loss']}%")
+        print(f"Take Profit: {config['take_profit']}%")
         print("-" * 30)
         print("[1] Long | [2] Short | [3] Amount | [4] Leverage | [X] Exit")
         
@@ -372,47 +378,55 @@ def main_trading_menu():
         
         if key == '1': 
             open_long()
-            position_menu()
         elif key == '2':
             open_short()
-            position_menu()
         elif key == '3':
-            trade_config['amount_usdt'] = float(input("\nEnter USDT Margin: ") or 10)
+            config['amount_usdt'] = float(input("\nEnter USDT Margin: ") or 10)
         elif key == '4':
-            trade_config['leverage'] = int(input("\nEnter Leverage: ") or 10)
+            config['leverage'] = int(input("\nEnter Leverage: ") or 10)
         elif key == 'X':
             sys.exit()
 
 def position_menu():
     while True:
-        print("[1] Close Position [X] Back")
+        print("[X] Back")
         key = get_single_key()
         
-        if key == '1':
-            close_position_market(get_symbol())
-            return
-        elif key == 'X':
-            return
+        # elif key == 'X':
+        #     return
 
 if __name__ == "__main__":
-    # # Initialize the exchange
-    exchange = ccxt.lbank({
-        'apiKey': api_key,
-        'secret': api_secret,
-        'enableRateLimit': True,
-        'options': {'defaultType': 'swap'} # Set to swap for derivatives
-    })
+    global session
 
-    try:
-        # Verify you are in demo mode by checking balance 
-        # (Bybit usually gives you 50,000 USDT in demo)
-        print("Connecting ...")
-        balance = exchange.fetch_balance()
-        #print(f"Connected! Balance: {balance['total']['USDT']}")
-        print(f"Connected!")
-    except Exception as e:
-        print(f"Connection Failed: {e}")
-        exit(1)
+    api_key = os.getenv('BYBIT_DEMO_API_KEY')
+    api_secret = os.getenv('BYBIT_DEMO_API_SECRET')
 
-    trade_config['coin'] = coin_selection_menu()
+
+    import logging
+    
+    session = HTTP(
+        testnet=False,
+        demo=True,
+        api_key=api_key,
+        api_secret=api_secret,
+    )
+
+    symbol = "SOLUSDT"
+    category = "linear"
+    instrument_info = session.get_instruments_info(category=category, symbol=symbol)
+    print(f"{instrument_info}")
+    price_scale = (instrument_info['result']['list'][0]['lotSizeFilter']['qtyStep'] )
+    tick_size = (instrument_info['result']['list'][0]['priceFilter']['tickSize'] )
+
+    global config
+    config = {
+        "pair": "SOLUSDT",
+        "price_scale": price_scale,
+        "tick_size": tick_size,
+        "amount_usdt": 2.0,
+        "leverage": 10,
+        "stop_loss": 0.5,
+        "take_profit": 1.1,
+    }
+
     main_trading_menu()

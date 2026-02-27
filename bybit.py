@@ -11,15 +11,15 @@ import ccxt
 SYMBOL_DECIMALS = 2
 
 # Get the value of an environment variable, returns None if not found
-api_key = os.getenv('BYBIT_API_KEY')
-api_secret = os.getenv('BYBIT_API_SECRET')
+api_key = os.getenv('BYBIT_DEMO_API_KEY')
+api_secret = os.getenv('BYBIT_DEMO_API_SECRET')
 
 trade_config = {
     "coin": "BTC",
-    "amount_usdt": 100.0,
+    "amount_usdt": 200.0,
     "leverage": 10,
-    "stop_loss": 0.5,
-    "take_profit": 2.0,
+    "stop_loss": 1.0,
+    "take_profit": 3.0,
 }
 
 current_order = {}
