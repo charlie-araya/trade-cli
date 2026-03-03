@@ -449,10 +449,10 @@ def get_maker_price(symbol, side, tick_size):
     # 3. Calculate a price 1 tick away to improve Maker chances
     if side.lower() == "buy":
         # Place buy order 1 tick below current price
-        target_price = lastPrice - (tick_size * 2)
+        target_price = lastPrice - (tick_size * 1)
     else:
         # Place sell order 1 tick above current price
-        target_price = lastPrice + (tick_size * 2)
+        target_price = lastPrice + (tick_size * 1)
         
     # Round to the correct tickSize precision
     #precision = len(str(tick_size).split('.')[-1]) if '.' in str(tick_size) else 0
@@ -476,6 +476,7 @@ if __name__ == "__main__":
     )
 
     symbol = "SOLUSDT"
+    #symbol = "BTCUSDT"
     category = "linear"
     instrument_info = session.get_instruments_info(category=category, symbol=symbol)
     print(f"{instrument_info}")
@@ -484,10 +485,10 @@ if __name__ == "__main__":
 
     global config
     config = {
-        "pair": "SOLUSDT",
+        "pair": symbol,
         "price_scale": price_scale,
         "tick_size": tick_size,
-        "amount_usdt": 2.0,
+        "amount_usdt": 200.0,
         "leverage": 10,
         "stop_loss": 0.5,
         "take_profit": 1.1,
